@@ -1,0 +1,21 @@
+# 凭证与隐私 - 绝不入库
+home/.pi/agent/auth.json
+home/.pi/agent/models-store.json
+*.key
+*.pem
+
+# 运行时产物
+graphd/kuzu_db*
+graphd/graphd.log
+*.log
+nohup.out
+
+# 依赖
+node_modules/
+
+# 会话数据
+home/.pi/agent/sessions/
+home/.pi/sessions/
+home/.npm/
+home/.cache/
+home/.local/
