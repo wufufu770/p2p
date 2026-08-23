@@ -74,12 +74,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
-        req = json.loads(self.rfile.read(n) or b"{}")
+        try:
+            req = json.loads(self.rfile.read(n) or b"{}")
+        except Exception as e:
+            return self._send(400, {"ok": False, "error": f"bad json: {e}"})
         # token 认证(未配置 P2P_TOKEN 时放行并告警一次)
         tok = os.environ.get("P2P_TOKEN", "")
         if tok and self.headers.get("X-Auth") != tok:
             return self._send(401, {"error": "unauthorized"})
         cypher_raw = req.get("cypher", "")
+        # 缺陷#18: DDL 禁令 —— schema 固定, 运行期禁止建/删表(worker 漂移防线)
+        import re as _ddl
+        if _ddl.search(r"\b(CREATE|DROP)\s+(NODE\s+|REL\s+)?TABLE", cypher_raw, _ddl.I):
+            return self._send(403, {"ok": False, "error": "DDL forbidden at runtime (schema is fixed)"})
         # 纵深防御: 写操作中的 URL host 必须在活跃 scope 内
         import re as _re
         if _re.search(r"\b(CREATE|SET|MERGE|DELETE)\b", cypher_raw):
