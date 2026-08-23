@@ -19,3 +19,9 @@ home/.pi/sessions/
 home/.npm/
 home/.cache/
 home/.local/
+
+# 战役运行时数据
+checkpoints/
+evidence/
+loot/
+experience.json

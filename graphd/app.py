@@ -75,6 +75,34 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(n) or b"{}")
+        # token 认证(未配置 P2P_TOKEN 时放行并告警一次)
+        tok = os.environ.get("P2P_TOKEN", "")
+        if tok and self.headers.get("X-Auth") != tok:
+            return self._send(401, {"error": "unauthorized"})
+        cypher_raw = req.get("cypher", "")
+        # 纵深防御: 写操作中的 URL host 必须在活跃 scope 内
+        import re as _re
+        if _re.search(r"\b(CREATE|SET|MERGE|DELETE)\b", cypher_raw):
+            urls = _re.findall(r"https?://[A-Za-z0-9.\-]+", cypher_raw)
+            hosts = set()
+            for u in urls:
+                h = u.split("://")[1].lower()
+                if h not in ("127.0.0.1", "localhost"):
+                    hosts.add(h)
+            if hosts:
+                with _lock:
+                    try:
+                        c = kuzu.Connection(db())
+                        r = c.execute("MATCH (e:Engagement) WHERE e.status = 'active' RETURN e.scope")
+                        scope = ""
+                        while r.has_next():
+                            scope += str(r.get_next()[0] or "") + ","
+                        allowed = [s.strip().lower() for s in scope.split(",") if s.strip()]
+                        for h in hosts:
+                            if not any(h == a or h.endswith("." + a) for a in allowed):
+                                return self._send(403, {"error": f"scope violation at graphd layer: {h}"})
+                    except Exception:
+                        pass
         if self.path == "/query":
             cypher = req.get("cypher", "").strip()
             params = req.get("params") or {}
@@ -95,6 +123,9 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception as e:
                     return self._send(400, {"ok": False, "error": str(e)})
         elif self.path == "/reset":
+            tok2 = os.environ.get("P2P_TOKEN", "")
+            if not tok2 or self.headers.get("X-Auth") != tok2:
+                return self._send(403, {"error": "/reset disabled (token required); use reset-graphs.sh instead"})
             global _db
             with _lock:
                 _db = None
