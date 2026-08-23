@@ -83,6 +83,14 @@ class Handler(BaseHTTPRequestHandler):
         if tok and self.headers.get("X-Auth") != tok:
             return self._send(401, {"error": "unauthorized"})
         cypher_raw = req.get("cypher", "")
+        # 缺陷#21: Finding 数据质量门 —— 无标题的 Finding 一律拒收(模板垃圾防线)
+        if "Finding" in cypher_raw and "CREATE" in cypher_raw.upper():
+            import re as _t
+            m = _t.search(r"title\\s*:", cypher_raw + " ")
+            if m:
+                tail = cypher_raw[m.end():m.end() + 3]
+                if tail[0:1] in (")", ","):
+                    return self._send(400, {"ok": False, "error": "Finding.title must be non-empty"})
         # 缺陷#18: DDL 禁令 —— schema 固定, 运行期禁止建/删表(worker 漂移防线)
         import re as _ddl
         if _ddl.search(r"\b(CREATE|DROP)\s+(NODE\s+|REL\s+)?TABLE", cypher_raw, _ddl.I):
