@@ -86,10 +86,10 @@ class Handler(BaseHTTPRequestHandler):
         # 缺陷#21: Finding 数据质量门 —— 无标题的 Finding 一律拒收(模板垃圾防线)
         if "Finding" in cypher_raw and "CREATE" in cypher_raw.upper():
             import re as _t
-            m = _t.search(r"title\\s*:", cypher_raw + " ")
+            m = _t.search(r"title\s*:", cypher_raw + " ")
             if m:
-                tail = cypher_raw[m.end():m.end() + 3]
-                if tail[0:1] in (")", ","):
+                tail = cypher_raw[m.end():].lstrip()[:2]
+                if tail[0:1] in (")", ",") or tail in ('""', "''"):
                     return self._send(400, {"ok": False, "error": "Finding.title must be non-empty"})
         # 缺陷#24: 垃圾洞清单机械门 —— 与 SKILL.md 铁律同源的拒绝模式
         if "Finding" in cypher_raw and "CREATE" in cypher_raw.upper():
