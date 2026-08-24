@@ -4,12 +4,15 @@ stdlib only (kuzu 除外). GET /health POST /query POST /reset
 """
 import json
 import os
+import re
 import sys
 import threading
+import time
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-DB_PATH = os.environ.get("P2P_GRAPH", "/home/wff/p2p/graphd/kuzu_db")
-PORT = int(os.environ.get("P2P_GRAPH_PORT", "8765"))
+DB_PATH = os.environ.get("P2P_GRAPH", "/home/wff/d2d/graphd/kuzu_db")
+PORT = int(os.environ.get("P2P_GRAPH_PORT", "8766"))
 
 import kuzu
 
@@ -72,16 +75,83 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, {"error": "unknown"})
 
+    def _auth(self, level):
+        """level='host': 需 HOST_TOKEN; level='worker': WORKER 或 HOST 均可。
+        未配置对应 token 时放行(向后兼容 range 模式)。"""
+        host = os.environ.get("P2P_HOST_TOKEN", "")
+        worker = os.environ.get("P2P_WORKER_TOKEN", "")
+        got = self.headers.get("X-Auth", "")
+        if level == "host":
+            return (not host) or got == host
+        return (not worker) or got in (worker, host) or bool(host) and got == host
+
     def do_POST(self):
+
         n = int(self.headers.get("Content-Length", 0))
         try:
             req = json.loads(self.rfile.read(n) or b"{}")
         except Exception as e:
             return self._send(400, {"ok": False, "error": f"bad json: {e}"})
-        # token 认证(未配置 P2P_TOKEN 时放行并告警一次)
+        # token 认证(未配置 P2P_TOKEN 时放行)
         tok = os.environ.get("P2P_TOKEN", "")
         if tok and self.headers.get("X-Auth") != tok:
             return self._send(401, {"error": "unauthorized"})
+        # ---- 结构化写端点: 参数校验替代内联 cypher 正则扫描(根治 #21 死门与 params 旁路) ----
+
+        if self.path in ("/write/finding", "/write/signal", "/write/hypothesis"):
+
+            if not self._auth("worker"):
+                return self._send(401, {"ok": False, "error": "unauthorized for structured writes"})
+            # 注意: req 已由 do_POST 开头解析, 此处严禁重复 rfile.read(#27 双读挂死)
+            with _lock:
+                try:
+                    conn = kuzu.Connection(db())
+                    if self.path == "/write/finding":
+                        title = str(req.get("title") or "").strip()
+                        if not title:
+                            return self._send(400, {"ok": False, "error": "title required"})
+                        tl = title.lower()
+                        junk = ["no rate limit", "missing rate limit", "lack of rate limiting",
+                                "rate limiting disabled", "限速缺失", "未限速",
+                                "security header", "安全头", "cors configuration",
+                                "sourcemap", "版本号指纹", "self-xss", "tls warning"]
+                        if any(j in tl for j in junk):
+                            return self._send(400, {"ok": False, "error": "garbage-listed finding rejected"})
+                        conn.execute(
+                            "CREATE (f:Finding {id:$id, title:$title, severity:$sev, cvss:$cvss, "
+                            "evidence_dir:$edir, repro:$repro, category:$cat, gate_status:'candidate', ts:$ts})",
+                            parameters={"id": str(req.get("id") or f"f-{int(time.time()*1000)}"),
+                                        "title": title, "sev": str(req.get("severity") or "medium"),
+                                        "cvss": float(req.get("cvss") or 5.0),
+                                        "edir": str(req.get("evidence_dir") or ""),
+                                        "repro": str(req.get("repro") or ""),
+                                        "cat": str(req.get("category") or "vuln"),
+                                        "ts": str(req.get("ts") or datetime.now(timezone.utc).isoformat())})
+                    elif self.path == "/write/signal":
+                        conn.execute(
+                            "CREATE (s:Signal_ {id:$id, type:$t, weight:$w, status:$st, evidence:$ev, ts:$ts, ring:$ring})",
+                            parameters={"id": str(req.get("id") or f"s-{int(time.time()*1000)}"),
+                                        "t": str(req.get("type") or "unknown"),
+                                        "w": float(req.get("weight") or 1.0),
+                                        "st": str(req.get("status") or "open"),
+                                        "ev": str(req.get("evidence") or "")[:2000],
+                                        "ts": str(req.get("ts") or datetime.now(timezone.utc).isoformat()),
+                                        "ring": str(req.get("ring") or "discovery")})
+                    else:
+                        conn.execute(
+                            "CREATE (h:Hypothesis {id:$id, text:$txt, strategy:$strat, status:'open', ts:$ts})",
+                            parameters={"id": str(req.get("id") or f"h-{int(time.time()*1000)}"),
+                                        "txt": str(req.get("text") or "")[:1500],
+                                        "strat": str(req.get("strategy") or "inversion"),
+                                        "ts": str(req.get("ts") or datetime.now(timezone.utc).isoformat())})
+                except Exception as e:
+                    return self._send(500, {"ok": False, "error": str(e)[:200]})
+            return self._send(200, {"ok": True})
+
+        # 经验库写权限收归 host(防被注入的 worker 给自己刷经验权重)
+        if re.search(r"ExperienceWeight", req.get("cypher", "")) and re.search(r"\b(CREATE|SET|MERGE|DELETE)\b", req.get("cypher", "")):
+            if not self._auth("host"):
+                return self._send(403, {"ok": False, "error": "ExperienceWeight mutations require host token"})
         cypher_raw = req.get("cypher", "")
         # 缺陷#21: Finding 数据质量门 —— 无标题的 Finding 一律拒收(模板垃圾防线)
         if "Finding" in cypher_raw and "CREATE" in cypher_raw.upper():
