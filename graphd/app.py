@@ -91,6 +91,18 @@ class Handler(BaseHTTPRequestHandler):
                 tail = cypher_raw[m.end():m.end() + 3]
                 if tail[0:1] in (")", ","):
                     return self._send(400, {"ok": False, "error": "Finding.title must be non-empty"})
+        # 缺陷#24: 垃圾洞清单机械门 —— 与 SKILL.md 铁律同源的拒绝模式
+        if "Finding" in cypher_raw and "CREATE" in cypher_raw.upper():
+            import re as _g
+            t = _g.search(r"title\s*:\s*[\"'](.*?)[\"']", cypher_raw)
+            if t:
+                tv = t.group(1).lower()
+                junk = ["no rate limit", "missing rate limit", "lack of rate limiting",
+                        "rate limiting disabled", "\u9650\u901f\u7f3a\u5931", "\u672a\u9650\u901f",
+                        "security header", "\u5b89\u5168\u5934", "cors configuration",
+                        "sourcemap", "\u7248\u672c\u53f7\u6307\u7eb9", "self-xss", "tls warning"]
+                if any(j in tv for j in junk):
+                    return self._send(400, {"ok": False, "error": "garbage-listed finding rejected: " + tv[:60]})
         # 缺陷#18: DDL 禁令 —— schema 固定, 运行期禁止建/删表(worker 漂移防线)
         import re as _ddl
         if _ddl.search(r"\b(CREATE|DROP)\s+(NODE\s+|REL\s+)?TABLE", cypher_raw, _ddl.I):
