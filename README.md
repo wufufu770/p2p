@@ -86,3 +86,16 @@ env.sh                               隔离环境切换脚本
 ## License
 
 MIT
+
+## 实现状态(声明即契约)
+
+| 声明 | 状态 | 验证途径 |
+|---|---|---|
+| 三环并行 + 图共享状态 | ✅ 实装 | compliance_check |
+| pi.on("") tool-call 拦截门控 | ✅ 实装(pi-coding-agent types L922) | deny 形状 {block,reason} |
+| worker OS timeout + 组杀 | ✅ 实装(#11/#9) | 进程树验证 |
+| AgentIdentity checkpoint 写入 | ✅ 实装 | rings.ts close handler |
+| 结构化写端点(/write/*) | ✅ 实装(Wave1) | graphd v2 |
+| 共享内核统一调度(p2p-core) | ⏳ 迁移中 | wufufu770/p2p-core |
+| proxygate 出口治理 | ⏳ 已建成未接线 | p2p-core packages/tools |
+| 验证器环 | ⏳ 计划中 | — |
