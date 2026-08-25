@@ -39,6 +39,7 @@ SCHEMA = [
     "CREATE NODE TABLE IF NOT EXISTS Signal_(id STRING, type STRING, weight DOUBLE DEFAULT 1.0, status STRING DEFAULT 'open', evidence STRING, ts STRING, ring STRING, PRIMARY KEY(id))",
     "CREATE NODE TABLE IF NOT EXISTS Hypothesis(id STRING, text STRING, strategy STRING, status STRING DEFAULT 'open', ts STRING, PRIMARY KEY(id))",
     "CREATE NODE TABLE IF NOT EXISTS Finding(id STRING, title STRING, severity STRING, cvss DOUBLE DEFAULT 0.0, evidence_dir STRING, repro STRING, category STRING DEFAULT 'vuln', gate_status STRING DEFAULT 'candidate', ts STRING, PRIMARY KEY(id))",
+    "CREATE NODE TABLE IF NOT EXISTS Plan(id STRING, text STRING, score DOUBLE DEFAULT 0.0, status STRING DEFAULT 'chosen', created_at STRING, PRIMARY KEY(id))",
     "CREATE NODE TABLE IF NOT EXISTS ExperienceWeight(id STRING, pattern STRING, stack STRING, prior DOUBLE DEFAULT 1.0, hits INT64 DEFAULT 0, wins INT64 DEFAULT 0, target_type STRING DEFAULT 'web', PRIMARY KEY(id))",
     "CREATE NODE TABLE IF NOT EXISTS AgentIdentity(worker_id STRING, ring STRING, chain STRING, status STRING, checkpoint STRING, todo STRING, updated_at STRING, PRIMARY KEY(worker_id))",
     "CREATE REL TABLE IF NOT EXISTS AT(FROM Signal_ TO Endpoint)",
@@ -91,7 +92,10 @@ class Handler(BaseHTTPRequestHandler):
         got = self.headers.get("X-Auth", "")
         if level == "host":
             return bool(host) and got == host
-        return bool(worker) and got in (worker, host)
+        # #33修复: host token 单独配置时也放行宿主写入
+        if worker:
+            return got in (worker, host)
+        return bool(host) and got == host
 
     def do_POST(self):
 
@@ -261,16 +265,18 @@ def _jsonify(v):
 
 if __name__ == "__main__":
     db()  # 初始化 schema
-    # #32: 每实例自动生成 host token 文件(宿主进程读取后获得经验库写权限)
+    # #32: host token 持久化 —— 文件存在则加载进环境; 不存在则生成
     import secrets as _sec
     if not os.environ.get("P2P_HOST_TOKEN"):
         tok_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".host-token")
-        try:
-            os.chmod(tok_path, 0o600)
-        except FileNotFoundError:
+        if os.path.exists(tok_path):
+            os.environ["P2P_HOST_TOKEN"] = open(tok_path).read().strip()
+        else:
+            tok = _sec.token_hex(16)
             with open(tok_path, "w") as f:
-                f.write(_sec.token_hex(16))
+                f.write(tok)
             os.chmod(tok_path, 0o600)
+            os.environ["P2P_HOST_TOKEN"] = tok
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     _tok = "required" if os.environ.get("P2P_TOKEN_REQUIRED") == "1" else "open"
     print(f"[graphd] listening :{PORT} db={DB_PATH} token_required={_tok} "
