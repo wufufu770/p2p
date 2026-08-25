@@ -1,0 +1,5 @@
+FLAG_1=/flag.txt content: PWNED-BY-VCLV -a
+FLAG_2=/uploads/flag.txt content: This_is_a_test_flag
+MARKER=/uploads/app.js content: // OWNED
+SERVER=Express, X-Powered-By header exposed
+REFLECTION=/ has literal <script>alert(1)</script>
